@@ -140,7 +140,18 @@ func listKeychainItems(service: String? = nil) -> [(service: String, account: St
 // MARK: - Secure Input
 
 func readSecurePassword() -> String? {
-    // Disable echo for secure input
+    // If stdin isn't a terminal (piped/redirected), read everything until
+    // EOF so multiline secrets (SSH keys, certs, etc.) come through intact.
+    guard isatty(FileHandle.standardInput.fileDescriptor) != 0 else {
+        let data = FileHandle.standardInput.readDataToEndOfFile()
+        guard var input = String(data: data, encoding: .utf8) else { return nil }
+        if input.hasSuffix("\n") {
+            input.removeLast()
+        }
+        return input
+    }
+
+    // Disable echo for secure interactive input
     var oldTermios = termios()
     tcgetattr(FileHandle.standardInput.fileDescriptor, &oldTermios)
 
@@ -185,6 +196,10 @@ func printUsage() {
       PASSWORD=$(keychain-fingerprint get myapp user@example.com)
       # use $PASSWORD
       unset PASSWORD
+
+    Multiline secrets (SSH keys, certs, etc.):
+      keychain-fingerprint set myapp user@example.com < secret.txt
+      cat secret.txt | keychain-fingerprint set myapp user@example.com
     """, stderr)
 }
 
@@ -209,7 +224,7 @@ func main() {
         let account = args[3]
 
         // Touch ID authentication
-        guard authenticateWithTouchID(reason: "Keychain 비밀번호 조회를 위해 인증이 필요합니다") else {
+        guard authenticateWithTouchID(reason: "Authentication is required to retrieve the password for \(service) (\(account))") else {
             exit(1)
         }
 
@@ -229,7 +244,7 @@ func main() {
         let account = args[3]
 
         // Touch ID authentication first
-        guard authenticateWithTouchID(reason: "Keychain 비밀번호 저장을 위해 인증이 필요합니다") else {
+        guard authenticateWithTouchID(reason: "Authentication is required to save the password for \(service) (\(account))") else {
             exit(1)
         }
 
@@ -255,7 +270,7 @@ func main() {
         let account = args[3]
 
         // Touch ID authentication
-        guard authenticateWithTouchID(reason: "Keychain 비밀번호 삭제를 위해 인증이 필요합니다") else {
+        guard authenticateWithTouchID(reason: "Authentication is required to delete the password for \(service) (\(account))") else {
             exit(1)
         }
 
@@ -266,12 +281,15 @@ func main() {
         }
 
     case "list":
+        let service = args.count >= 3 ? args[2] : nil
+
         // Touch ID authentication
-        guard authenticateWithTouchID(reason: "Keychain 목록 조회를 위해 인증이 필요합니다") else {
+        let listReason = service.map { "Authentication is required to list Keychain items for \($0)" }
+            ?? "Authentication is required to list Keychain items"
+        guard authenticateWithTouchID(reason: listReason) else {
             exit(1)
         }
 
-        let service = args.count >= 3 ? args[2] : nil
         let items = listKeychainItems(service: service)
 
         if items.isEmpty {
