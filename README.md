@@ -29,10 +29,6 @@ This tool uses **Touch ID** for authentication:
 ## Installation
 
 ```bash
-# Clone
-git clone https://github.com/dss99911/keychain-fingerprint.git
-cd keychain-fingerprint
-
 # Compile
 swiftc -o keychain-fingerprint main.swift -framework LocalAuthentication -framework Security
 
@@ -40,8 +36,8 @@ swiftc -o keychain-fingerprint main.swift -framework LocalAuthentication -framew
 sudo cp keychain-fingerprint /usr/local/bin/
 
 # IMPORTANT: Set root ownership (security)
-sudo chown root:wheel keychain-fingerprint
-sudo chmod 755 keychain-fingerprint
+sudo chown root:wheel /usr/local/bin/keychain-fingerprint
+sudo chmod 755 /usr/local/bin/keychain-fingerprint
 ```
 
 > ⚠️ **Security Note**: The binary must be owned by root with execute-only permission for regular users. This prevents malicious code injection into a tool that accesses Keychain.

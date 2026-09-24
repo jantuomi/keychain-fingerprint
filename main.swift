@@ -137,6 +137,65 @@ func listKeychainItems(service: String? = nil) -> [(service: String, account: St
     return items
 }
 
+// MARK: - Editor Integration
+
+func createSecureTempFile(content: String) -> URL? {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("keychain-fingerprint-\(UUID().uuidString).tmp")
+
+    guard FileManager.default.createFile(
+        atPath: url.path,
+        contents: content.data(using: .utf8),
+        attributes: [.posixPermissions: 0o600]
+    ) else {
+        return nil
+    }
+
+    return url
+}
+
+func secureDeleteFile(at url: URL) {
+    if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+       let size = attrs[.size] as? Int, size > 0,
+       let handle = FileHandle(forWritingAtPath: url.path) {
+        handle.write(Data(count: size))
+        try? handle.close()
+    }
+    try? FileManager.default.removeItem(at: url)
+}
+
+func trimSingleTrailingNewline(_ string: String) -> String {
+    var string = string
+    if string.hasSuffix("\n") {
+        string.removeLast()
+    }
+    return string
+}
+
+func openInEditor(filePath: String) -> Bool {
+    let editorCommand = ProcessInfo.processInfo.environment["EDITOR"] ?? "vi"
+    var tokens = editorCommand.split(separator: " ").map(String.init)
+    if tokens.isEmpty { tokens = ["vi"] }
+    let executable = tokens.removeFirst()
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = [executable] + tokens + [filePath]
+    process.standardInput = FileHandle.standardInput
+    process.standardOutput = FileHandle.standardOutput
+    process.standardError = FileHandle.standardError
+
+    do {
+        try process.run()
+    } catch {
+        fputs("Error: Failed to launch editor '\(executable)': \(error.localizedDescription)\n", stderr)
+        return false
+    }
+
+    process.waitUntilExit()
+    return process.terminationStatus == 0
+}
+
 // MARK: - Secure Input
 
 func readSecurePassword() -> String? {
@@ -178,6 +237,7 @@ func printUsage() {
       get <service> <account>     Get password (requires Touch ID)
       set <service> <account>     Set password (requires Touch ID)
       delete <service> <account>  Delete password (requires Touch ID)
+      edit <service> <account>    Edit password in $EDITOR (requires Touch ID)
       list [service]              List items (requires Touch ID)
 
     Security:
@@ -189,6 +249,7 @@ func printUsage() {
     Examples:
       keychain-fingerprint get myapp user@example.com
       keychain-fingerprint set myapp user@example.com
+      keychain-fingerprint edit myapp user@example.com
       keychain-fingerprint list
       keychain-fingerprint delete myapp user@example.com
 
@@ -276,6 +337,54 @@ func main() {
 
         if deleteKeychainPassword(service: service, account: account) {
             fputs("Password deleted successfully\n", stderr)
+        } else {
+            exit(1)
+        }
+
+    case "edit":
+        guard args.count >= 4 else {
+            fputs("Error: 'edit' requires <service> and <account>\n", stderr)
+            exit(1)
+        }
+
+        let service = args[2]
+        let account = args[3]
+
+        // Touch ID authentication
+        guard authenticateWithTouchID(reason: "Authentication is required to edit the password for \(service) (\(account))") else {
+            exit(1)
+        }
+
+        guard let currentPassword = getKeychainPassword(service: service, account: account) else {
+            exit(1)
+        }
+
+        guard let tempURL = createSecureTempFile(content: currentPassword) else {
+            fputs("Error: Failed to create temporary file\n", stderr)
+            exit(1)
+        }
+
+        let editSucceeded = openInEditor(filePath: tempURL.path)
+
+        guard editSucceeded, let editedContent = try? String(contentsOf: tempURL, encoding: .utf8) else {
+            secureDeleteFile(at: tempURL)
+            fputs("Error: Editor exited abnormally or content could not be read; changes discarded\n", stderr)
+            exit(1)
+        }
+
+        secureDeleteFile(at: tempURL)
+
+        let newPassword = trimSingleTrailingNewline(editedContent)
+
+        guard !newPassword.isEmpty else {
+            fputs("Error: Edited content is empty; not saving\n", stderr)
+            exit(1)
+        }
+
+        if newPassword == currentPassword {
+            fputs("No changes made\n", stderr)
+        } else if setKeychainPassword(service: service, account: account, password: newPassword) {
+            fputs("Password updated successfully\n", stderr)
         } else {
             exit(1)
         }
